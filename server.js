@@ -254,7 +254,7 @@ io.on("connection", (socket) => {
 
 // ✅ API Endpoints
 
-// Login/Register endpoint (combined)
+// Login endpoint
 app.post("/api/login", (req, res) => {
   try {
     const { username } = req.body;
@@ -292,12 +292,11 @@ app.post("/api/login", (req, res) => {
       });
     }
 
-    // Create new user
-    const userId =
-      Date.now().toString() + Math.random().toString(36).substr(2, 5);
+    // If user doesn't exist, create new user (auto-register)
+    const userId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
     userNames.set(userId, trimmedUsername);
 
-    console.log("✅ New user registered:", trimmedUsername, "with ID:", userId);
+    console.log("✅ New user auto-registered:", trimmedUsername, "with ID:", userId);
 
     res.json({
       success: true,
@@ -305,18 +304,18 @@ app.post("/api/login", (req, res) => {
         id: userId,
         username: trimmedUsername,
       },
-      message: "Registration successful!",
+      message: "User created and logged in successfully!",
     });
   } catch (error) {
-    console.error("Login/Register error:", error);
+    console.error("Login error:", error);
     res.status(500).json({
       success: false,
-      message: "Authentication failed",
+      message: "Login failed",
     });
   }
 });
 
-// Register endpoint (for compatibility)
+// Register endpoint (for explicit registration)
 app.post("/api/register", (req, res) => {
   try {
     const { username } = req.body;
@@ -336,6 +335,7 @@ app.post("/api/register", (req, res) => {
       });
     }
 
+    // Check if user already exists
     let existingUser = null;
     for (const [userId, storedUsername] of userNames.entries()) {
       if (storedUsername.toLowerCase() === trimmedUsername.toLowerCase()) {
@@ -345,16 +345,19 @@ app.post("/api/register", (req, res) => {
     }
 
     if (existingUser) {
+      console.log("✅ User already exists:", trimmedUsername);
       return res.json({
         success: true,
         user: existingUser,
-        message: "Welcome back!",
+        message: "User already exists. Please login.",
       });
     }
 
-    const userId =
-      Date.now().toString() + Math.random().toString(36).substr(2, 5);
+    // Create new user
+    const userId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
     userNames.set(userId, trimmedUsername);
+
+    console.log("✅ New user registered:", trimmedUsername, "with ID:", userId);
 
     res.json({
       success: true,
@@ -393,13 +396,14 @@ app.get("/", (req, res) => {
     version: "1.0.0",
     timestamp: new Date().toISOString(),
     endpoints: {
-      login: "/api/login (POST)",
-      register: "/api/register (POST)",
+      login: "/api/login (POST) - Auto-registers if user doesn't exist",
+      register: "/api/register (POST) - Explicit registration",
       saveFCMToken: "/api/save-fcm-token (POST)",
       health: "/api/health (GET)",
       users: "/api/users (GET)",
       onlineUsers: "/api/online-users (GET)",
       messages: "/api/private-messages (GET)",
+      debug: "/api/debug (GET)",
     },
   });
 });
@@ -539,6 +543,7 @@ app.get("/api/debug", (req, res) => {
     userNames: Array.from(userNames.entries()),
     mockMessagesSize: mockMessages.size,
     firebaseInitialized,
+    totalUsers: userNames.size,
   });
 });
 
@@ -573,6 +578,16 @@ server.listen(PORT, HOST, () => {
   );
   console.log(`👥 Registered users: ${userNames.size}`);
   console.log(`🌐 CORS enabled for ${allowedOrigins.length} origins`);
+  console.log("\n📌 Available Endpoints:");
+  console.log("   POST   /api/login     - Login (auto-registers if new user)");
+  console.log("   POST   /api/register  - Explicit registration");
+  console.log("   POST   /api/save-fcm-token - Save FCM token");
+  console.log("   GET    /api/health    - Health check");
+  console.log("   GET    /api/users     - Get all users");
+  console.log("   GET    /api/online-users - Get online users");
+  console.log("   GET    /api/private-messages - Get messages");
+  console.log("   POST   /api/private-messages - Save message");
+  console.log("   GET    /api/debug     - Debug info");
   console.log("=".repeat(60) + "\n");
 });
 
