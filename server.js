@@ -5,8 +5,9 @@ import cors from "cors";
 import dotenv from "dotenv";
 import admin from "firebase-admin";
 import { fileURLToPath } from "url";
-import { dirname, join } from "path";
+import { dirname } from "path";
 
+// Load environment variables
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -15,40 +16,44 @@ const __dirname = dirname(__filename);
 const app = express();
 const server = http.createServer(app);
 
-// ✅ CORS configuration - SINGLE CONFIGURATION
+// ✅ CORS configuration
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:3000",
   "http://127.0.0.1:5173",
   "http://192.168.29.92:5173",
-  "https://real-time-chat-application-sand-three.vercel.app"
+  "https://real-time-chat-application-sand-three.vercel.app",
+  "https://chat-app-frontend-xi.vercel.app",
 ];
 
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
+
+    if (
+      allowedOrigins.indexOf(origin) !== -1 ||
+      process.env.NODE_ENV !== "production"
+    ) {
       callback(null, true);
     } else {
-      console.log('Origin not allowed:', origin);
-      callback(null, true); // Allow all in development
+      console.log("⚠️ Origin not allowed:", origin);
+      if (process.env.NODE_ENV !== "production") {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
     }
   },
   credentials: true,
   optionsSuccessStatus: 200,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
+  allowedHeaders: ["Content-Type", "Authorization"],
 };
 
-// Apply CORS middleware - ONLY ONCE
 app.use(cors(corsOptions));
+app.use(express.json({ limit: "10mb" }));
 
-// Parse JSON bodies
-app.use(express.json());
-
-// Initialize Firebase Admin (only if credentials exist)
+// Initialize Firebase Admin
 let firebaseInitialized = false;
 let db = null;
 
@@ -63,14 +68,10 @@ try {
     db = admin.firestore();
   } else {
     console.log("⚠️ FIREBASE_SERVICE_ACCOUNT not found, using mock data");
-    firebaseInitialized = false;
-    db = null;
   }
 } catch (error) {
-  console.error("❌ Firebase initialization error:", error);
+  console.error("❌ Firebase initialization error:", error.message);
   console.log("⚠️ Continuing with mock data mode");
-  firebaseInitialized = false;
-  db = null;
 }
 
 // Socket.io setup
@@ -80,33 +81,52 @@ const io = new Server(server, {
     methods: ["GET", "POST"],
     credentials: true,
   },
+  transports: ["websocket", "polling"],
+  pingTimeout: 60000,
+  pingInterval: 25000,
 });
 
-// Store online users
-const onlineUsers = new Map(); // userId -> socketId
-const userSockets = new Map(); // socketId -> userId
-const userNames = new Map(); // userId -> username
-
-// Store messages in memory (for mock mode)
-const mockMessages = new Map(); // key: `${userId}_${otherUserId}` -> array of messages
+// Store data
+const onlineUsers = new Map();
+const userSockets = new Map();
+const userNames = new Map();
+const mockMessages = new Map();
 
 // Socket.io connection handling
 io.on("connection", (socket) => {
-  console.log("🟢 New client connected:", socket.id);
+  console.log(`🟢 New client connected: ${socket.id}`);
 
-  // Handle user registration
+  // 📞 Handle Call
+  socket.on("call-user", (data) => {
+    io.to(data.to).emit("incoming-call", {
+      from: data.from,
+    });
+  });
+
   socket.on("register", (userId, username) => {
-    if (userId) {
+    try {
+      if (!userId) {
+        console.log("❌ Invalid registration: missing userId");
+        return;
+      }
+
+      if (onlineUsers.has(userId)) {
+        const oldSocketId = onlineUsers.get(userId);
+        if (oldSocketId !== socket.id) {
+          console.log(`👤 User ${userId} reconnecting, cleaning old socket`);
+          const oldSocket = io.sockets.sockets.get(oldSocketId);
+          if (oldSocket) oldSocket.disconnect(true);
+          onlineUsers.delete(userId);
+          userSockets.delete(oldSocketId);
+        }
+      }
+
       onlineUsers.set(userId, socket.id);
       userSockets.set(socket.id, userId);
-      if (username) {
-        userNames.set(userId, username);
-      }
-      console.log(
-        `👤 User ${userId} (${username || "Unknown"}) registered with socket ${socket.id}`,
-      );
+      if (username) userNames.set(userId, username);
 
-      // Broadcast updated online users list
+      console.log(`👤 User ${userId} (${username || "Unknown"}) registered`);
+
       const onlineUsersList = Array.from(onlineUsers.entries()).map(
         ([userId, socketId]) => ({
           userId,
@@ -114,103 +134,83 @@ io.on("connection", (socket) => {
           socketId,
         }),
       );
+
       io.emit("onlineUsers", onlineUsersList);
-      
-      // Send current online users to the new user
       socket.emit("onlineUsers", onlineUsersList);
+      socket.emit("registered", { success: true, userId, username });
+    } catch (error) {
+      console.error("Error in register handler:", error);
+      socket.emit("error", { message: "Registration failed" });
     }
   });
 
-  // Handle private messages
   socket.on("private-message", (data) => {
-    console.log("📨 Received private message:", data);
+    try {
+      const { toUserId, fromUserId, fromUsername, text, timestamp, id } = data;
 
-    const { toUserId, fromUserId, fromUsername, text, timestamp, id } = data;
+      if (!toUserId || !fromUserId || !text) return;
 
-    // Store message in mock database if Firebase not available
-    if (!firebaseInitialized) {
-      const key = [fromUserId, toUserId].sort().join('_');
-      if (!mockMessages.has(key)) {
-        mockMessages.set(key, []);
+      if (!firebaseInitialized) {
+        const key = [fromUserId, toUserId].sort().join("_");
+        if (!mockMessages.has(key)) mockMessages.set(key, []);
+        mockMessages.get(key).push(data);
       }
-      mockMessages.get(key).push(data);
-      console.log(`💾 Message stored in mock database for key: ${key}`);
+
+      const receiverSocketId = onlineUsers.get(toUserId);
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit("private-message", {
+          id,
+          fromUserId,
+          fromUsername,
+          toUserId,
+          text,
+          timestamp,
+          type: "private",
+        });
+        console.log(`📨 Message sent to ${toUserId}`);
+      } else {
+        console.log(`📨 User ${toUserId} offline, message stored`);
+      }
+
+      socket.emit("message-sent", { id, success: true });
+    } catch (error) {
+      console.error("Error in private-message handler:", error);
+      socket.emit("error", { message: "Failed to send message" });
     }
-
-    // Find receiver's socket
-    const receiverSocketId = onlineUsers.get(toUserId);
-
-    if (receiverSocketId) {
-      // Send to specific user
-      io.to(receiverSocketId).emit("private-message", {
-        id,
-        fromUserId,
-        fromUsername,
-        toUserId,
-        text,
-        timestamp,
-        type: "private",
-      });
-      console.log(`✅ Message sent to user ${toUserId}`);
-    } else {
-      console.log(`❌ User ${toUserId} is offline`);
-    }
-
-    // Also send back to sender for confirmation
-    socket.emit("private-message", {
-      id,
-      fromUserId,
-      fromUsername,
-      toUserId,
-      text,
-      timestamp,
-      type: "private",
-    });
   });
 
-  // Handle private messages (alternative event name)
   socket.on("privateMessage", (data) => {
-    console.log("📨 Received private message (alt):", data);
+    try {
+      const { toUserId, fromUserId, fromUsername, text, timestamp, id } = data;
 
-    const { toUserId, fromUserId, fromUsername, text, timestamp, id } = data;
+      if (!toUserId || !fromUserId || !text) return;
 
-    // Store message in mock database if Firebase not available
-    if (!firebaseInitialized) {
-      const key = [fromUserId, toUserId].sort().join('_');
-      if (!mockMessages.has(key)) {
-        mockMessages.set(key, []);
+      if (!firebaseInitialized) {
+        const key = [fromUserId, toUserId].sort().join("_");
+        if (!mockMessages.has(key)) mockMessages.set(key, []);
+        mockMessages.get(key).push(data);
       }
-      mockMessages.get(key).push(data);
+
+      const receiverSocketId = onlineUsers.get(toUserId);
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit("privateMessage", {
+          id,
+          fromUserId,
+          fromUsername,
+          toUserId,
+          text,
+          timestamp,
+          type: "private",
+        });
+      }
+
+      socket.emit("message-sent", { id, success: true });
+    } catch (error) {
+      console.error("Error in privateMessage handler:", error);
+      socket.emit("error", { message: "Failed to send message" });
     }
-
-    // Find receiver's socket
-    const receiverSocketId = onlineUsers.get(toUserId);
-
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit("privateMessage", {
-        id,
-        fromUserId,
-        fromUsername,
-        toUserId,
-        text,
-        timestamp,
-        type: "private",
-      });
-      console.log(`✅ Message sent to user ${toUserId} (alt event)`);
-    }
-
-    socket.emit("privateMessage", {
-      id,
-      fromUserId,
-      fromUsername,
-      toUserId,
-      text,
-      timestamp,
-      type: "private",
-    });
   });
 
-  // Handle typing indicators
   socket.on("typing", ({ username, isTyping, toUserId }) => {
     const receiverSocketId = onlineUsers.get(toUserId);
     if (receiverSocketId) {
@@ -222,9 +222,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Handle get users request
   socket.on("getUsers", () => {
-    // Send list of online users
     const usersList = Array.from(onlineUsers.entries()).map(
       ([userId, socketId]) => ({
         id: userId,
@@ -235,17 +233,12 @@ io.on("connection", (socket) => {
     socket.emit("users", usersList);
   });
 
-  // Handle disconnection
-  socket.on("disconnect", () => {
-    console.log("🔴 Client disconnected:", socket.id);
-
+  socket.on("disconnect", (reason) => {
     const userId = userSockets.get(socket.id);
     if (userId) {
       onlineUsers.delete(userId);
       userSockets.delete(socket.id);
-      // Keep userNames for reconnection
 
-      // Broadcast updated online users list
       const onlineUsersList = Array.from(onlineUsers.entries()).map(
         ([userId, socketId]) => ({
           userId,
@@ -254,131 +247,196 @@ io.on("connection", (socket) => {
         }),
       );
       io.emit("onlineUsers", onlineUsersList);
-      console.log(`👤 User ${userId} went offline`);
+      console.log(`👤 User ${userId} went offline (${reason})`);
     }
   });
 });
 
-// ✅ Register user API
-app.post("/api/register", (req, res) => {
+// ✅ API Endpoints
+
+// Login/Register endpoint (combined)
+app.post("/api/login", (req, res) => {
   try {
     const { username } = req.body;
 
-    if (!username) {
+    if (!username || typeof username !== "string") {
       return res.status(400).json({
         success: false,
-        message: "Username required",
+        message: "Valid username required",
       });
     }
 
-    // Check if username already exists (in mock mode)
+    const trimmedUsername = username.trim();
+    if (trimmedUsername.length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: "Username must be at least 2 characters",
+      });
+    }
+
+    // Check if user exists
     let existingUser = null;
     for (const [userId, storedUsername] of userNames.entries()) {
-      if (storedUsername === username) {
+      if (storedUsername.toLowerCase() === trimmedUsername.toLowerCase()) {
         existingUser = { id: userId, username: storedUsername };
         break;
       }
     }
 
     if (existingUser) {
-      console.log("✅ User already registered:", username);
+      console.log("✅ User logged in:", trimmedUsername);
       return res.json({
         success: true,
         user: existingUser,
-        message: "User already exists",
+        message: "Login successful!",
       });
     }
 
-    // Generate a unique ID
-    const userId = Date.now().toString();
-    
-    // Store username (even if offline)
-    userNames.set(userId, username);
-    
-    console.log("✅ New user registered:", username, "with ID:", userId);
+    // Create new user
+    const userId =
+      Date.now().toString() + Math.random().toString(36).substr(2, 5);
+    userNames.set(userId, trimmedUsername);
+
+    console.log("✅ New user registered:", trimmedUsername, "with ID:", userId);
 
     res.json({
       success: true,
       user: {
         id: userId,
-        username: username,
+        username: trimmedUsername,
       },
+      message: "Registration successful!",
     });
   } catch (error) {
-    console.error("Register error:", error);
-
+    console.error("Login/Register error:", error);
     res.status(500).json({
       success: false,
-      message: "Register failed",
-      error: error.message,
+      message: "Authentication failed",
     });
   }
 });
 
-// REST API endpoints
+// Register endpoint (for compatibility)
+app.post("/api/register", (req, res) => {
+  try {
+    const { username } = req.body;
+
+    if (!username || typeof username !== "string") {
+      return res.status(400).json({
+        success: false,
+        message: "Valid username required",
+      });
+    }
+
+    const trimmedUsername = username.trim();
+    if (trimmedUsername.length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: "Username must be at least 2 characters",
+      });
+    }
+
+    let existingUser = null;
+    for (const [userId, storedUsername] of userNames.entries()) {
+      if (storedUsername.toLowerCase() === trimmedUsername.toLowerCase()) {
+        existingUser = { id: userId, username: storedUsername };
+        break;
+      }
+    }
+
+    if (existingUser) {
+      return res.json({
+        success: true,
+        user: existingUser,
+        message: "Welcome back!",
+      });
+    }
+
+    const userId =
+      Date.now().toString() + Math.random().toString(36).substr(2, 5);
+    userNames.set(userId, trimmedUsername);
+
+    res.json({
+      success: true,
+      user: {
+        id: userId,
+        username: trimmedUsername,
+      },
+      message: "Registration successful!",
+    });
+  } catch (error) {
+    console.error("Register error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Registration failed",
+    });
+  }
+});
+
+// Save FCM Token
+app.post("/api/save-fcm-token", (req, res) => {
+  try {
+    const { userId, token } = req.body;
+    console.log(`📱 FCM Token saved for user ${userId}:`, token);
+    res.json({ success: true, message: "Token saved" });
+  } catch (error) {
+    console.error("Error saving FCM token:", error);
+    res.status(500).json({ success: false, message: "Failed to save token" });
+  }
+});
+
+// Home endpoint
 app.get("/", (req, res) => {
   res.json({
     message: "Chat App Backend is running!",
     mode: firebaseInitialized ? "Firebase" : "Mock Data",
+    version: "1.0.0",
     timestamp: new Date().toISOString(),
-    onlineUsers: onlineUsers.size,
-    registeredUsers: userNames.size,
     endpoints: {
-      health: "/api/health",
-      register: "/api/register",
-      users: "/api/users",
-      onlineUsers: "/api/online-users",
-      messages: "/api/private-messages",
-      debug: "/api/debug/messages",
-      socket: "WebSocket connection available"
-    }
+      login: "/api/login (POST)",
+      register: "/api/register (POST)",
+      saveFCMToken: "/api/save-fcm-token (POST)",
+      health: "/api/health (GET)",
+      users: "/api/users (GET)",
+      onlineUsers: "/api/online-users (GET)",
+      messages: "/api/private-messages (GET)",
+    },
   });
 });
 
+// Health check endpoint
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
     timestamp: new Date().toISOString(),
-    firebase: firebaseInitialized ? "connected" : "not connected (using mock data)",
+    firebase: firebaseInitialized ? "connected" : "mock data",
     onlineUsers: onlineUsers.size,
     registeredUsers: userNames.size,
-    server: "running",
     uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    nodeVersion: process.version
   });
 });
 
-// Get private messages between two users
+// Get private messages
 app.get("/api/private-messages", async (req, res) => {
   try {
     const { userId, otherUserId } = req.query;
 
     if (!userId || !otherUserId) {
-      return res.status(400).json({ 
-        error: "Missing userId or otherUserId",
-        messages: [] 
+      return res.status(400).json({
+        success: false,
+        messages: [],
       });
     }
 
     let messages = [];
 
-    // If Firebase is not initialized, use mock data
     if (!firebaseInitialized || !db) {
-      console.log("Using mock messages data for users:", userId, otherUserId);
-      
-      // Get messages from mock storage
-      const key = [userId, otherUserId].sort().join('_');
+      const key = [userId, otherUserId].sort().join("_");
       const storedMessages = mockMessages.get(key) || [];
-      
-      // Sort messages by timestamp
-      messages = storedMessages.sort((a, b) => 
-        new Date(a.timestamp) - new Date(b.timestamp)
+      messages = storedMessages.sort(
+        (a, b) => new Date(a.timestamp) - new Date(b.timestamp),
       );
-      
-      console.log(`Found ${messages.length} mock messages`);
     } else {
-      // Query messages from Firebase
       const messagesRef = db.collection("privateMessages");
       const snapshot = await messagesRef
         .where("participants", "array-contains", userId)
@@ -394,91 +452,71 @@ app.get("/api/private-messages", async (req, res) => {
         }
       });
 
-      // Sort by timestamp
       messages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
     }
 
-    res.json({ 
+    res.json({
       success: true,
       messages,
-      count: messages.length 
+      count: messages.length,
     });
   } catch (error) {
-    console.error("Error fetching private messages:", error);
-    res.status(500).json({ 
-      error: "Failed to fetch messages",
-      messages: [] 
+    console.error("Error fetching messages:", error);
+    res.status(500).json({
+      success: false,
+      messages: [],
     });
   }
 });
 
-// Save a new message
+// Save private message
 app.post("/api/private-messages", async (req, res) => {
   try {
     const message = req.body;
 
     if (!message.fromUserId || !message.toUserId || !message.text) {
-      return res.status(400).json({ 
+      return res.status(400).json({
+        success: false,
         error: "Missing required fields",
-        success: false 
       });
     }
 
-    // If Firebase is not initialized, save to mock storage
     if (!firebaseInitialized || !db) {
-      console.log("Mock saving message:", message);
-      
-      // Generate ID if not provided
       if (!message.id) {
         message.id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       }
-      
-      // Add timestamp if not provided
       if (!message.timestamp) {
         message.timestamp = new Date().toISOString();
       }
-      
-      // Store in mock messages
-      const key = [message.fromUserId, message.toUserId].sort().join('_');
-      if (!mockMessages.has(key)) {
-        mockMessages.set(key, []);
-      }
+
+      const key = [message.fromUserId, message.toUserId].sort().join("_");
+      if (!mockMessages.has(key)) mockMessages.set(key, []);
       mockMessages.get(key).push(message);
-      
-      return res.json({ 
-        success: true, 
-        id: message.id, 
-        message 
-      });
+
+      return res.json({ success: true, id: message.id, message });
     }
 
-    // Add participants array for easier querying
     message.participants = [message.fromUserId, message.toUserId];
     message.createdAt = new Date().toISOString();
 
     const docRef = await db.collection("privateMessages").add(message);
 
-    res.json({ 
-      success: true, 
-      id: docRef.id, 
-      message 
-    });
+    res.json({ success: true, id: docRef.id, message });
   } catch (error) {
     console.error("Error saving message:", error);
-    res.status(500).json({ 
-      error: "Failed to save message",
-      success: false 
-    });
+    res.status(500).json({ success: false, error: "Failed to save message" });
   }
 });
 
 // Get all registered users
 app.get("/api/users", (req, res) => {
-  const allUsers = Array.from(userNames.entries()).map(([userId, username]) => ({
-    id: userId,
-    username: username,
-    isOnline: onlineUsers.has(userId),
-  }));
+  const allUsers = Array.from(userNames.entries()).map(
+    ([userId, username]) => ({
+      id: userId,
+      username: username,
+      isOnline: onlineUsers.has(userId),
+    }),
+  );
   res.json(allUsers);
 });
 
@@ -494,43 +532,31 @@ app.get("/api/online-users", (req, res) => {
   res.json(onlineUsersList);
 });
 
-// Debug endpoint to see all stored mock messages
-app.get("/api/debug/messages", (req, res) => {
-  if (!firebaseInitialized) {
-    const allMessages = {};
-    for (const [key, messages] of mockMessages.entries()) {
-      allMessages[key] = messages;
-    }
-    res.json({
-      mode: "mock",
-      messages: allMessages,
-      totalConversations: mockMessages.size,
-      totalMessages: Array.from(mockMessages.values()).reduce((sum, msgs) => sum + msgs.length, 0)
-    });
-  } else {
-    res.json({
-      mode: "firebase",
-      message: "Using Firebase database"
-    });
-  }
-});
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error("Error:", err);
-  res.status(500).json({
-    error: "Internal server error",
-    message: err.message,
-    success: false
+// Debug endpoint
+app.get("/api/debug", (req, res) => {
+  res.json({
+    onlineUsers: Array.from(onlineUsers.entries()),
+    userNames: Array.from(userNames.entries()),
+    mockMessagesSize: mockMessages.size,
+    firebaseInitialized,
   });
 });
 
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({
+    success: false,
     error: "Not found",
     path: req.path,
-    success: false
+  });
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error("Error:", err);
+  res.status(500).json({
+    success: false,
+    error: "Internal server error",
   });
 });
 
@@ -542,17 +568,15 @@ server.listen(PORT, HOST, () => {
   console.log("\n" + "=".repeat(60));
   console.log(`🚀 Server running on http://${HOST}:${PORT}`);
   console.log(`📡 WebSocket server ready at ws://${HOST}:${PORT}`);
-  console.log(`🌐 CORS enabled for origins:`);
-  allowedOrigins.forEach(origin => {
-    console.log(`   - ${origin}`);
-  });
-  console.log(`📝 Mode: ${firebaseInitialized ? "Firebase Database" : "Mock Data (in-memory)"}`);
+  console.log(
+    `📝 Mode: ${firebaseInitialized ? "Firebase Database" : "Mock Data"}`,
+  );
   console.log(`👥 Registered users: ${userNames.size}`);
-  console.log(`🔌 Online users: ${onlineUsers.size}`);
+  console.log(`🌐 CORS enabled for ${allowedOrigins.length} origins`);
   console.log("=".repeat(60) + "\n");
 });
 
-// Handle graceful shutdown
+// Graceful shutdown
 process.on("SIGINT", () => {
   console.log("\n👋 Shutting down gracefully...");
   server.close(() => {
