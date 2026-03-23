@@ -54,11 +54,10 @@ try {
 // Socket.io setup
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:5173", "http://192.168.29.92:5173"],
+    origin: "https://real-time-chat-application-sand-three.vercel.app",
     methods: ["GET", "POST"],
-    credentials: true,
-  },
-  transports: ['websocket', 'polling'],
+    credentials: true
+  }
 });
 
 // Store online users
