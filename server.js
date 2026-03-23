@@ -86,7 +86,7 @@ const io = new Server(server, {
   pingInterval: 25000,
 });
 
-// Store data
+// Store data using Map for better performance
 const onlineUsers = new Map(); // userId -> socketId
 const userSockets = new Map(); // socketId -> userId
 const userNames = new Map(); // userId -> username
@@ -138,11 +138,19 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Alternative register event for video call
-  socket.on("register-user", (userId) => {
+  // Alternative register event for video call (using object for consistency)
+  socket.on("register-user", (data) => {
+    // Handle both string and object formats
+    const userId = typeof data === 'object' ? data.userId : data;
+    const username = typeof data === 'object' ? data.username : null;
+    
     console.log("👤 Registered user (video call):", userId);
+    
+    if (!userId) return;
+    
     onlineUsers.set(userId, socket.id);
     userSockets.set(socket.id, userId);
+    if (username) userNames.set(userId, username);
     
     const onlineUsersList = Array.from(onlineUsers.entries()).map(
       ([userId, socketId]) => ({
@@ -152,6 +160,9 @@ io.on("connection", (socket) => {
       }),
     );
     io.emit("onlineUsers", onlineUsersList);
+    
+    // Send confirmation back
+    socket.emit("registered", { success: true, userId, username });
   });
 
   // 📞 CALL USER (Video/Audio Call)
@@ -168,9 +179,12 @@ io.on("connection", (socket) => {
         offer,
       });
       console.log(`📞 Call initiated from ${from} to ${to}`);
+      
+      // Send confirmation to caller
+      socket.emit("call-initiated", { to, success: true });
     } else {
       console.log(`❌ User ${to} is offline`);
-      socket.emit("call-error", { message: "User is offline" });
+      socket.emit("call-error", { message: "User is offline", to });
     }
   });
 
@@ -186,12 +200,15 @@ io.on("connection", (socket) => {
         answer,
       });
       console.log(`📞 Call answered by ${to}`);
+    } else {
+      console.log(`❌ Cannot answer: User ${to} is offline`);
+      socket.emit("call-error", { message: "User is offline" });
     }
   });
 
   // ❄ ICE CANDIDATE
   socket.on("ice-candidate", (data) => {
-    console.log("❄ ICE candidate sent:", data);
+    console.log("❄ ICE candidate sent to:", data.to);
     
     const { to, candidate } = data;
     const receiverSocketId = onlineUsers.get(to);
@@ -244,6 +261,11 @@ io.on("connection", (socket) => {
         console.log(`📨 Message sent to ${toUserId}`);
       } else {
         console.log(`📨 User ${toUserId} offline, message stored`);
+        // Store offline message (optional)
+        const offlineKey = `offline_${toUserId}`;
+        const offlineMessages = mockMessages.get(offlineKey) || [];
+        offlineMessages.push(data);
+        mockMessages.set(offlineKey, offlineMessages);
       }
 
       socket.emit("message-sent", { id, success: true });
@@ -317,6 +339,7 @@ io.on("connection", (socket) => {
     if (userId) {
       onlineUsers.delete(userId);
       userSockets.delete(socket.id);
+      // Keep userNames for reconnection
 
       const onlineUsersList = Array.from(onlineUsers.entries()).map(
         ([userId, socketId]) => ({
@@ -331,7 +354,7 @@ io.on("connection", (socket) => {
   });
 });
 
-// ✅ API Endpoints
+// ✅ API Endpoints (Same as before - keeping them unchanged)
 
 // Login endpoint
 app.post("/api/login", (req, res) => {
@@ -353,7 +376,6 @@ app.post("/api/login", (req, res) => {
       });
     }
 
-    // Check if user exists
     let existingUser = null;
     for (const [userId, storedUsername] of userNames.entries()) {
       if (storedUsername.toLowerCase() === trimmedUsername.toLowerCase()) {
@@ -371,7 +393,6 @@ app.post("/api/login", (req, res) => {
       });
     }
 
-    // If user doesn't exist, create new user (auto-register)
     const userId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
     userNames.set(userId, trimmedUsername);
 
@@ -394,7 +415,7 @@ app.post("/api/login", (req, res) => {
   }
 });
 
-// Register endpoint (for explicit registration)
+// Register endpoint
 app.post("/api/register", (req, res) => {
   try {
     const { username } = req.body;
@@ -414,7 +435,6 @@ app.post("/api/register", (req, res) => {
       });
     }
 
-    // Check if user already exists
     let existingUser = null;
     for (const [userId, storedUsername] of userNames.entries()) {
       if (storedUsername.toLowerCase() === trimmedUsername.toLowerCase()) {
@@ -432,7 +452,6 @@ app.post("/api/register", (req, res) => {
       });
     }
 
-    // Create new user
     const userId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
     userNames.set(userId, trimmedUsername);
 
@@ -475,8 +494,8 @@ app.get("/", (req, res) => {
     version: "1.0.0",
     timestamp: new Date().toISOString(),
     endpoints: {
-      login: "/api/login (POST) - Auto-registers if user doesn't exist",
-      register: "/api/register (POST) - Explicit registration",
+      login: "/api/login (POST)",
+      register: "/api/register (POST)",
       saveFCMToken: "/api/save-fcm-token (POST)",
       health: "/api/health (GET)",
       users: "/api/users (GET)",
