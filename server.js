@@ -56,8 +56,8 @@ const io = new Server(server, {
   cors: {
     origin: "https://real-time-chat-application-sand-three.vercel.app",
     methods: ["GET", "POST"],
-    credentials: true
-  }
+    credentials: true,
+  },
 });
 
 // Store online users
@@ -77,14 +77,18 @@ io.on("connection", (socket) => {
       if (username) {
         userNames.set(userId, username);
       }
-      console.log(`👤 User ${userId} (${username || 'Unknown'}) registered with socket ${socket.id}`);
-      
+      console.log(
+        `👤 User ${userId} (${username || "Unknown"}) registered with socket ${socket.id}`,
+      );
+
       // Broadcast updated online users list
-      const onlineUsersList = Array.from(onlineUsers.entries()).map(([userId, socketId]) => ({
-        userId,
-        username: userNames.get(userId) || `User ${userId}`,
-        socketId,
-      }));
+      const onlineUsersList = Array.from(onlineUsers.entries()).map(
+        ([userId, socketId]) => ({
+          userId,
+          username: userNames.get(userId) || `User ${userId}`,
+          socketId,
+        }),
+      );
       io.emit("onlineUsers", onlineUsersList);
     }
   });
@@ -92,12 +96,12 @@ io.on("connection", (socket) => {
   // Handle private messages
   socket.on("private-message", (data) => {
     console.log("📨 Received private message:", data);
-    
+
     const { toUserId, fromUserId, fromUsername, text, timestamp, id } = data;
-    
+
     // Find receiver's socket
     const receiverSocketId = onlineUsers.get(toUserId);
-    
+
     if (receiverSocketId) {
       // Send to specific user
       io.to(receiverSocketId).emit("private-message", {
@@ -113,7 +117,7 @@ io.on("connection", (socket) => {
     } else {
       console.log(`❌ User ${toUserId} is offline`);
     }
-    
+
     // Also send back to sender for confirmation
     socket.emit("private-message", {
       id,
@@ -129,12 +133,12 @@ io.on("connection", (socket) => {
   // Handle private messages (alternative event name)
   socket.on("privateMessage", (data) => {
     console.log("📨 Received private message (alt):", data);
-    
+
     const { toUserId, fromUserId, fromUsername, text, timestamp, id } = data;
-    
+
     // Find receiver's socket
     const receiverSocketId = onlineUsers.get(toUserId);
-    
+
     if (receiverSocketId) {
       io.to(receiverSocketId).emit("privateMessage", {
         id,
@@ -147,7 +151,7 @@ io.on("connection", (socket) => {
       });
       console.log(`✅ Message sent to user ${toUserId} (alt event)`);
     }
-    
+
     socket.emit("privateMessage", {
       id,
       fromUserId,
@@ -174,50 +178,86 @@ io.on("connection", (socket) => {
   // Handle get users request
   socket.on("getUsers", () => {
     // Send list of online users
-    const usersList = Array.from(onlineUsers.entries()).map(([userId, socketId]) => ({
-      id: userId,
-      username: userNames.get(userId) || `User ${userId}`,
-      isOnline: true,
-    }));
+    const usersList = Array.from(onlineUsers.entries()).map(
+      ([userId, socketId]) => ({
+        id: userId,
+        username: userNames.get(userId) || `User ${userId}`,
+        isOnline: true,
+      }),
+    );
     socket.emit("users", usersList);
   });
 
   // Handle disconnection
   socket.on("disconnect", () => {
     console.log("🔴 Client disconnected:", socket.id);
-    
+
     const userId = userSockets.get(socket.id);
     if (userId) {
       onlineUsers.delete(userId);
       userSockets.delete(socket.id);
       userNames.delete(userId);
-      
+
       // Broadcast updated online users list
-      const onlineUsersList = Array.from(onlineUsers.entries()).map(([userId, socketId]) => ({
-        userId,
-        username: userNames.get(userId) || `User ${userId}`,
-        socketId,
-      }));
+      const onlineUsersList = Array.from(onlineUsers.entries()).map(
+        ([userId, socketId]) => ({
+          userId,
+          username: userNames.get(userId) || `User ${userId}`,
+          socketId,
+        }),
+      );
       io.emit("onlineUsers", onlineUsersList);
     }
   });
 });
 
+// ✅ Register user API
+app.post("/api/register", (req, res) => {
+  try {
+    const { username } = req.body;
+
+    if (!username) {
+      return res.status(400).json({
+        message: "Username required",
+      });
+    }
+
+    console.log("✅ User registered:", username);
+
+    // Mock response (abhi database nahi hai)
+    res.json({
+      success: true,
+      user: {
+        id: Date.now(),
+        username: username,
+      },
+    });
+  } catch (error) {
+    console.error("Register error:", error);
+
+    res.status(500).json({
+      message: "Register failed",
+    });
+  }
+});
+
 // REST API endpoints
 app.get("/", (req, res) => {
-  res.json({ 
+  res.json({
     message: "Chat App Backend is running!",
     mode: firebaseInitialized ? "Firebase" : "Mock Data",
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 });
 
 app.get("/api/health", (req, res) => {
-  res.json({ 
-    status: "ok", 
+  res.json({
+    status: "ok",
     timestamp: new Date().toISOString(),
-    firebase: firebaseInitialized ? "connected" : "not connected (using mock data)",
-    onlineUsers: onlineUsers.size
+    firebase: firebaseInitialized
+      ? "connected"
+      : "not connected (using mock data)",
+    onlineUsers: onlineUsers.size,
   });
 });
 
@@ -225,7 +265,7 @@ app.get("/api/health", (req, res) => {
 app.get("/api/private-messages", async (req, res) => {
   try {
     const { userId, otherUserId } = req.query;
-    
+
     if (!userId || !otherUserId) {
       return res.status(400).json({ error: "Missing userId or otherUserId" });
     }
@@ -234,10 +274,7 @@ app.get("/api/private-messages", async (req, res) => {
     if (!firebaseInitialized || !db) {
       console.log("Using mock messages data");
       // Generate some mock messages
-      const mockMessages = [
-       
-       
-      ];
+      const mockMessages = [];
       return res.json({ messages: mockMessages });
     }
 
@@ -272,7 +309,7 @@ app.get("/api/private-messages", async (req, res) => {
 app.post("/api/private-messages", async (req, res) => {
   try {
     const message = req.body;
-    
+
     if (!firebaseInitialized || !db) {
       console.log("Mock saving message:", message);
       return res.json({ success: true, message });
@@ -280,9 +317,9 @@ app.post("/api/private-messages", async (req, res) => {
 
     // Add participants array for easier querying
     message.participants = [message.fromUserId, message.toUserId];
-    
+
     const docRef = await db.collection("privateMessages").add(message);
-    
+
     res.json({ success: true, id: docRef.id, message });
   } catch (error) {
     console.error("Error saving message:", error);
@@ -292,11 +329,13 @@ app.post("/api/private-messages", async (req, res) => {
 
 // Get all users
 app.get("/api/users", (req, res) => {
-  const usersList = Array.from(onlineUsers.entries()).map(([userId, socketId]) => ({
-    id: userId,
-    username: userNames.get(userId) || `User ${userId}`,
-    isOnline: true,
-  }));
+  const usersList = Array.from(onlineUsers.entries()).map(
+    ([userId, socketId]) => ({
+      id: userId,
+      username: userNames.get(userId) || `User ${userId}`,
+      isOnline: true,
+    }),
+  );
   res.json(usersList);
 });
 
@@ -306,5 +345,7 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📡 WebSocket server ready`);
   console.log(`🌐 CORS enabled for: ${corsOptions.origin.join(", ")}`);
-  console.log(`📝 Mode: ${firebaseInitialized ? "Firebase Database" : "Mock Data (no Firebase)"}`);
+  console.log(
+    `📝 Mode: ${firebaseInitialized ? "Firebase Database" : "Mock Data (no Firebase)"}`,
+  );
 });
