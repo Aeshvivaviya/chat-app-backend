@@ -87,22 +87,16 @@ const io = new Server(server, {
 });
 
 // Store data
-const onlineUsers = new Map();
-const userSockets = new Map();
-const userNames = new Map();
+const onlineUsers = new Map(); // userId -> socketId
+const userSockets = new Map(); // socketId -> userId
+const userNames = new Map(); // userId -> username
 const mockMessages = new Map();
 
 // Socket.io connection handling
 io.on("connection", (socket) => {
   console.log(`🟢 New client connected: ${socket.id}`);
 
-  // 📞 Handle Call
-  socket.on("call-user", (data) => {
-    io.to(data.to).emit("incoming-call", {
-      from: data.from,
-    });
-  });
-
+  // 🧠 Register user for chat
   socket.on("register", (userId, username) => {
     try {
       if (!userId) {
@@ -144,6 +138,86 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Alternative register event for video call
+  socket.on("register-user", (userId) => {
+    console.log("👤 Registered user (video call):", userId);
+    onlineUsers.set(userId, socket.id);
+    userSockets.set(socket.id, userId);
+    
+    const onlineUsersList = Array.from(onlineUsers.entries()).map(
+      ([userId, socketId]) => ({
+        userId,
+        username: userNames.get(userId) || `User ${userId}`,
+        socketId,
+      }),
+    );
+    io.emit("onlineUsers", onlineUsersList);
+  });
+
+  // 📞 CALL USER (Video/Audio Call)
+  socket.on("call-user", (data) => {
+    console.log("📞 Calling user:", data);
+    
+    const { to, from, offer, fromUsername } = data;
+    const receiverSocketId = onlineUsers.get(to);
+
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit("incoming-call", {
+        from,
+        fromUsername: fromUsername || userNames.get(from) || "Unknown",
+        offer,
+      });
+      console.log(`📞 Call initiated from ${from} to ${to}`);
+    } else {
+      console.log(`❌ User ${to} is offline`);
+      socket.emit("call-error", { message: "User is offline" });
+    }
+  });
+
+  // 📞 ANSWER CALL
+  socket.on("answer-call", (data) => {
+    console.log("📞 Answering call:", data);
+    
+    const { to, answer } = data;
+    const receiverSocketId = onlineUsers.get(to);
+
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit("call-answered", {
+        answer,
+      });
+      console.log(`📞 Call answered by ${to}`);
+    }
+  });
+
+  // ❄ ICE CANDIDATE
+  socket.on("ice-candidate", (data) => {
+    console.log("❄ ICE candidate sent:", data);
+    
+    const { to, candidate } = data;
+    const receiverSocketId = onlineUsers.get(to);
+
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit("ice-candidate", {
+        candidate,
+      });
+    }
+  });
+
+  // 📞 End Call
+  socket.on("end-call", (data) => {
+    console.log("🔴 Ending call:", data);
+    
+    const { to } = data;
+    const receiverSocketId = onlineUsers.get(to);
+
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit("call-ended", {
+        message: "Call ended",
+      });
+    }
+  });
+
+  // 📨 Private messages
   socket.on("private-message", (data) => {
     try {
       const { toUserId, fromUserId, fromUsername, text, timestamp, id } = data;
@@ -211,6 +285,7 @@ io.on("connection", (socket) => {
     }
   });
 
+  // ⌨️ Typing indicators
   socket.on("typing", ({ username, isTyping, toUserId }) => {
     const receiverSocketId = onlineUsers.get(toUserId);
     if (receiverSocketId) {
@@ -222,6 +297,7 @@ io.on("connection", (socket) => {
     }
   });
 
+  // 👥 Get users
   socket.on("getUsers", () => {
     const usersList = Array.from(onlineUsers.entries()).map(
       ([userId, socketId]) => ({
@@ -233,7 +309,10 @@ io.on("connection", (socket) => {
     socket.emit("users", usersList);
   });
 
+  // 🔴 Disconnect
   socket.on("disconnect", (reason) => {
+    console.log(`🔴 Client disconnected: ${socket.id}, reason: ${reason}`);
+
     const userId = userSockets.get(socket.id);
     if (userId) {
       onlineUsers.delete(userId);
@@ -588,6 +667,15 @@ server.listen(PORT, HOST, () => {
   console.log("   GET    /api/private-messages - Get messages");
   console.log("   POST   /api/private-messages - Save message");
   console.log("   GET    /api/debug     - Debug info");
+  console.log("\n📞 WebSocket Events:");
+  console.log("   register / register-user - Register user");
+  console.log("   call-user - Initiate video/audio call");
+  console.log("   answer-call - Answer incoming call");
+  console.log("   ice-candidate - Send ICE candidate");
+  console.log("   end-call - End call");
+  console.log("   private-message - Send private message");
+  console.log("   typing - Typing indicator");
+  console.log("   getUsers - Get online users list");
   console.log("=".repeat(60) + "\n");
 });
 
