@@ -15,6 +15,7 @@ const __dirname = dirname(__filename);
 const app = express();
 const server = http.createServer(app);
 
+
 // CORS configuration
 const corsOptions = {
   origin: ["http://localhost:5173", "http://192.168.29.92:5173"], // Add your frontend URLs
@@ -23,6 +24,17 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+const cors = require("cors");
+
+// ✅ CORS FIX
+app.use(
+  cors({
+    origin: "https://real-time-chat-application-sand-three.vercel.app",
+    methods: ["GET", "POST"],
+    credentials: true
+  })
+);
+
 app.use(express.json());
 
 // Initialize Firebase Admin (only if credentials exist)
