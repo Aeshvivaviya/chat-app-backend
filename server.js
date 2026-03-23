@@ -87,10 +87,33 @@ const io = new Server(server, {
 });
 
 // Store data using Map for better performance
-const onlineUsers = new Map(); // userId -> socketId
+
 const userSockets = new Map(); // socketId -> userId
 const userNames = new Map(); // userId -> username
 const mockMessages = new Map();
+
+const onlineUsers = {};
+
+io.on("connection", (socket) => {
+
+  console.log(
+    "✅ User connected:",
+    socket.id
+  );
+
+  socket.on("register-user", (userId) => {
+
+    onlineUsers[userId] =
+      socket.id;
+
+    console.log(
+      "👤 Registered:",
+      userId
+    );
+
+  });
+
+});
 
 // Socket.io connection handling
 io.on("connection", (socket) => {
