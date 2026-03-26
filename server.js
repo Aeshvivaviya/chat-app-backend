@@ -941,10 +941,20 @@ app.post("/api/send-otp", async (req, res) => {
   otpStore.set(email, { otp, expiresAt: Date.now() + 10 * 60 * 1000 });
 
   try {
-    const resend = new Resend(process.env.RESEND_API_KEY);
+    const nodemailer = await import("nodemailer");
+    const transporter = nodemailer.default.createTransport({
+      host: "smtp-relay.brevo.com",
+      port: 587,
+      secure: false,
+      family: 4,
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    });
 
-    await resend.emails.send({
-      from: "MeetUp <onboarding@resend.dev>",
+    await transporter.sendMail({
+      from: `"MeetUp" <${process.env.EMAIL_USER}>`,
       to: email,
       subject: "Your MeetUp Verification Code",
       html: `
