@@ -10,6 +10,7 @@ import { fileURLToPath } from "url";
 import { dirname } from "path";
 import fs from "fs";
 import os from "os";
+import { Resend } from "resend";
 
 // Load environment variables
 dotenv.config();
@@ -940,19 +941,10 @@ app.post("/api/send-otp", async (req, res) => {
   otpStore.set(email, { otp, expiresAt: Date.now() + 10 * 60 * 1000 });
 
   try {
-    const nodemailer = await import("nodemailer");
-    const transporter = nodemailer.default.createTransport({
-      host: "smtp-relay.brevo.com",
-      port: 587,
-      secure: false,
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
+    const resend = new Resend(process.env.RESEND_API_KEY);
 
-    await transporter.sendMail({
-      from: `"MeetUp" <${process.env.EMAIL_USER}>`,
+    await resend.emails.send({
+      from: "MeetUp <onboarding@resend.dev>",
       to: email,
       subject: "Your MeetUp Verification Code",
       html: `
