@@ -928,6 +928,65 @@ if (process.env.NODE_ENV !== "production") {
   });
 }
 
+// OTP store (in-memory)
+const otpStore = new Map();
+
+// Send OTP route
+app.post("/api/send-otp", async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ success: false, message: "Email required" });
+
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  otpStore.set(email, { otp, expiresAt: Date.now() + 10 * 60 * 1000 });
+
+  try {
+    const nodemailer = await import("nodemailer");
+    const transporter = nodemailer.default.createTransport({
+      service: "gmail",
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    });
+
+    await transporter.sendMail({
+      from: `"MeetUp" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: "Your MeetUp Verification Code",
+      html: `
+        <div style="font-family:sans-serif;max-width:400px;margin:auto;padding:24px;border:1px solid #eee;border-radius:12px;">
+          <h2 style="color:#2D8CFF;">MeetUp Verification</h2>
+          <p>Your verification code is:</p>
+          <h1 style="letter-spacing:8px;color:#1a1a1a;">${otp}</h1>
+          <p style="color:#888;font-size:12px;">This code expires in 10 minutes.</p>
+        </div>
+      `,
+    });
+
+    console.log(`✅ OTP sent to ${email}`);
+    res.json({ success: true, message: "OTP sent" });
+  } catch (err) {
+    console.error("❌ Email send error:", err.message);
+    res.status(500).json({ success: false, message: "Failed to send OTP" });
+  }
+});
+
+// Verify OTP route
+app.post("/api/verify-otp", (req, res) => {
+  const { email, otp } = req.body;
+  const record = otpStore.get(email);
+
+  if (!record) return res.status(400).json({ success: false, message: "OTP not found" });
+  if (Date.now() > record.expiresAt) {
+    otpStore.delete(email);
+    return res.status(400).json({ success: false, message: "OTP expired" });
+  }
+  if (record.otp !== otp) return res.status(400).json({ success: false, message: "Invalid OTP" });
+
+  otpStore.delete(email);
+  res.json({ success: true, message: "OTP verified" });
+});
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({
