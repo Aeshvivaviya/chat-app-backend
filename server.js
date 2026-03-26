@@ -954,7 +954,7 @@ app.post("/api/send-otp", async (req, res) => {
     });
 
     await transporter.sendMail({
-      from: `"MeetUp" <${process.env.EMAIL_USER}>`,
+      from: `"MeetUp" <a617d0001@smtp-brevo.com>`,
       to: email,
       subject: "Your MeetUp Verification Code",
       html: `
@@ -1064,6 +1064,12 @@ const logServerStart = (port) => {
 server
   .listen(PORT, HOST, () => {
     logServerStart(PORT);
+
+    // Self-ping every 14 minutes to prevent Render free tier sleep
+    const SELF_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+    setInterval(() => {
+      fetch(`${SELF_URL}/api/health`).catch(() => {});
+    }, 14 * 60 * 1000);
   })
   .on("error", (error) => {
     if (error.code === "EADDRINUSE") {
