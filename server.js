@@ -941,31 +941,28 @@ app.post("/api/send-otp", async (req, res) => {
   otpStore.set(email, { otp, expiresAt: Date.now() + 10 * 60 * 1000 });
 
   try {
-    const nodemailer = await import("nodemailer");
-    const transporter = nodemailer.default.createTransport({
-      host: "smtp-relay.brevo.com",
-      port: 587,
-      secure: false,
-      family: 4,
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
+    const res2 = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
       },
+      body: JSON.stringify({
+        from: "MeetUp <onboarding@resend.dev>",
+        to: email,
+        subject: "Your MeetUp Verification Code",
+        html: `
+          <div style="font-family:sans-serif;max-width:400px;margin:auto;padding:24px;border:1px solid #eee;border-radius:12px;">
+            <h2 style="color:#2D8CFF;">MeetUp Verification</h2>
+            <p>Your verification code is:</p>
+            <h1 style="letter-spacing:8px;color:#1a1a1a;">${otp}</h1>
+            <p style="color:#888;font-size:12px;">This code expires in 10 minutes.</p>
+          </div>
+        `,
+      }),
     });
-
-    await transporter.sendMail({
-      from: `"MeetUp" <a617d0001@smtp-brevo.com>`,
-      to: email,
-      subject: "Your MeetUp Verification Code",
-      html: `
-        <div style="font-family:sans-serif;max-width:400px;margin:auto;padding:24px;border:1px solid #eee;border-radius:12px;">
-          <h2 style="color:#2D8CFF;">MeetUp Verification</h2>
-          <p>Your verification code is:</p>
-          <h1 style="letter-spacing:8px;color:#1a1a1a;">${otp}</h1>
-          <p style="color:#888;font-size:12px;">This code expires in 10 minutes.</p>
-        </div>
-      `,
-    });
+    const data = await res2.json();
+    if (!res2.ok) throw new Error(data.message || "Resend error");
 
     console.log(`✅ OTP sent to ${email}`);
     res.json({ success: true, message: "OTP sent" });
