@@ -570,6 +570,29 @@ io.on("connection", (socket) => {
     }
   });
 
+  // 📹 WebRTC Signaling
+  socket.on("join-room", (roomId, userId) => {
+    socket.join(roomId);
+    console.log(`📹 User ${userId} joined room ${roomId}`);
+    socket.to(roomId).emit("user-joined", userId);
+  });
+
+  socket.on("offer", (data) => {
+    socket.to(data.roomId).emit("offer", data);
+  });
+
+  socket.on("answer", (data) => {
+    socket.to(data.roomId).emit("answer", data);
+  });
+
+  socket.on("ice-candidate", (data) => {
+    socket.to(data.roomId).emit("ice-candidate", data);
+  });
+
+  socket.on("user-left", (roomId) => {
+    socket.to(roomId).emit("user-left", socket.id);
+  });
+
   // 🔴 Disconnect
   socket.on("disconnect", (reason) => {
     console.log(`🔴 Client disconnected: ${socket.id}, reason: ${reason}`);
