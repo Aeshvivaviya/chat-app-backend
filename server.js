@@ -590,7 +590,18 @@ io.on("connection", (socket) => {
   });
 
   socket.on("user-left", (roomId) => {
-    socket.to(roomId).emit("user-left", socket.id);
+    const room = io.sockets.adapter.rooms.get(roomId);
+    const roomSize = room ? room.size : 0;
+
+    if (roomSize <= 2) {
+      // Only 2 users — end call for everyone
+      io.to(roomId).emit("call-ended");
+    } else {
+      // Group call — just notify others this user left
+      socket.to(roomId).emit("user-left", socket.id);
+    }
+
+    socket.leave(roomId);
   });
 
   // 🔴 Disconnect
