@@ -571,10 +571,10 @@ io.on("connection", (socket) => {
   });
 
   // 📹 WebRTC Signaling
-  socket.on("join-room", (roomId, userId) => {
+  socket.on("join-room", (roomId, userId, userName) => {
     socket.join(roomId);
-    console.log(`📹 User ${userId} joined room ${roomId}`);
-    socket.to(roomId).emit("user-joined", userId);
+    console.log(`📹 User ${userName || userId} joined room ${roomId}`);
+    socket.to(roomId).emit("user-joined", { userId, name: userName || "Guest" });
   });
 
   socket.on("offer", (data) => {
