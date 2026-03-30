@@ -221,6 +221,7 @@ const userSockets = new Map(); // socketId -> userId
 const userNames = new Map(); // userId -> username
 const mockMessages = new Map();
 const offlineMessages = new Map(); // userId -> array of offline messages
+const fcmTokens = new Map(); // userId -> fcmToken
 
 // Clean up offline messages periodically (every hour)
 const cleanupInterval = setInterval(
@@ -520,12 +521,30 @@ io.on("connection", (socket) => {
         // Store offline message with limit
         const pendingMessages = offlineMessages.get(toUserId) || [];
         pendingMessages.push(messageData);
-
-        // Limit offline messages per user (keep last 100)
-        if (pendingMessages.length > 100) {
-          pendingMessages.shift();
-        }
+        if (pendingMessages.length > 100) pendingMessages.shift();
         offlineMessages.set(toUserId, pendingMessages);
+
+        // Send FCM push notification if token available
+        const fcmToken = fcmTokens.get(toUserId);
+        if (fcmToken && firebaseInitialized && admin.messaging) {
+          admin.messaging().send({
+            token: fcmToken,
+            notification: {
+              title: `New message from ${messageData.fromUsername}`,
+              body: messageData.text.length > 100 ? messageData.text.slice(0, 100) + "..." : messageData.text,
+            },
+            webpush: {
+              notification: {
+                icon: "/favicon.svg",
+                badge: "/favicon.svg",
+                tag: fromUserId,
+                renotify: true,
+              },
+              fcmOptions: { link: "/chat" },
+            },
+          }).then(() => console.log(`🔔 FCM notification sent to ${toUserId}`))
+            .catch(e => console.error("FCM send error:", e.message));
+        }
       }
 
       socket.emit("message-sent", { id, success: true });
@@ -759,14 +778,10 @@ app.post("/api/register", (req, res) => {
 app.post("/api/save-fcm-token", (req, res) => {
   try {
     const { userId, token } = req.body;
-
     if (!userId || !token) {
-      return res.status(400).json({
-        success: false,
-        message: "User ID and token required",
-      });
+      return res.status(400).json({ success: false, message: "User ID and token required" });
     }
-
+    fcmTokens.set(userId, token);
     console.log(`📱 FCM Token saved for user ${userId}`);
     res.json({ success: true, message: "Token saved" });
   } catch (error) {
