@@ -513,38 +513,38 @@ io.on("connection", (socket) => {
       }
 
       const receiverSocketId = onlineUsers.get(toUserId);
+
+      // Send FCM notification regardless of online status
+      const fcmToken = fcmTokens.get(toUserId);
+      if (fcmToken && firebaseInitialized) {
+        admin.messaging().send({
+          token: fcmToken,
+          notification: {
+            title: `💬 ${messageData.fromUsername}`,
+            body: messageData.text.length > 100 ? messageData.text.slice(0, 100) + "..." : messageData.text,
+          },
+          webpush: {
+            notification: {
+              icon: "/favicon.svg",
+              tag: fromUserId,
+              renotify: true,
+              requireInteraction: false,
+            },
+            fcmOptions: { link: "https://real-time-chat-application-sand-three.vercel.app/chat" },
+          },
+        }).then(() => console.log(`🔔 FCM sent to ${toUserId}`))
+          .catch(e => console.warn("FCM send error:", e.message));
+      }
+
       if (receiverSocketId) {
         io.to(receiverSocketId).emit("private-message", messageData);
         console.log(`📨 Message sent to ${toUserId}`);
       } else {
         console.log(`📨 User ${toUserId} offline, storing message`);
-        // Store offline message with limit
         const pendingMessages = offlineMessages.get(toUserId) || [];
         pendingMessages.push(messageData);
         if (pendingMessages.length > 100) pendingMessages.shift();
         offlineMessages.set(toUserId, pendingMessages);
-
-        // Send FCM push notification if token available
-        const fcmToken = fcmTokens.get(toUserId);
-        if (fcmToken && firebaseInitialized && admin.messaging) {
-          admin.messaging().send({
-            token: fcmToken,
-            notification: {
-              title: `New message from ${messageData.fromUsername}`,
-              body: messageData.text.length > 100 ? messageData.text.slice(0, 100) + "..." : messageData.text,
-            },
-            webpush: {
-              notification: {
-                icon: "/favicon.svg",
-                badge: "/favicon.svg",
-                tag: fromUserId,
-                renotify: true,
-              },
-              fcmOptions: { link: "/chat" },
-            },
-          }).then(() => console.log(`🔔 FCM notification sent to ${toUserId}`))
-            .catch(e => console.error("FCM send error:", e.message));
-        }
       }
 
       socket.emit("message-sent", { id, success: true });
@@ -775,13 +775,17 @@ app.post("/api/register", (req, res) => {
 });
 
 // Save FCM Token
-app.post("/api/save-fcm-token", (req, res) => {
+app.post("/api/save-fcm-token", async (req, res) => {
   try {
     const { userId, token } = req.body;
     if (!userId || !token) {
       return res.status(400).json({ success: false, message: "User ID and token required" });
     }
     fcmTokens.set(userId, token);
+    // Persist to Firestore
+    if (db) {
+      await db.collection("fcmTokens").doc(userId).set({ userId, token, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
+    }
     console.log(`📱 FCM Token saved for user ${userId}`);
     res.json({ success: true, message: "Token saved" });
   } catch (error) {
@@ -1168,8 +1172,18 @@ async function loadUsersFromFirestore() {
       }
     });
     console.log(`✅ Loaded ${userNames.size} users from Firestore`);
+
+    // Also load FCM tokens
+    const tokenSnap = await db.collection("fcmTokens").get();
+    tokenSnap.forEach(doc => {
+      const data = doc.data();
+      if (data.userId && data.token) {
+        fcmTokens.set(data.userId, data.token);
+      }
+    });
+    console.log(`✅ Loaded ${fcmTokens.size} FCM tokens from Firestore`);
   } catch (e) {
-    console.error("❌ Failed to load users from Firestore:", e.message);
+    console.error("❌ Failed to load from Firestore:", e.message);
   }
 }
 
