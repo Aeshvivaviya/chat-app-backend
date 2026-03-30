@@ -974,6 +974,29 @@ app.get("/api/online-users", (req, res) => {
   res.json(onlineUsersList);
 });
 
+// Delete a user
+app.delete("/api/users/:userId", async (req, res) => {
+  const { userId } = req.params;
+  try {
+    // Remove from memory
+    userNames.delete(userId);
+    onlineUsers.delete(userId);
+    // Remove from Firestore if available
+    if (db) {
+      await db.collection("users").doc(userId).delete().catch(() => {});
+    }
+    // Broadcast updated users list
+    const updatedUsers = Array.from(userNames.entries()).map(([id, username]) => ({
+      id, username, isOnline: onlineUsers.has(id),
+    }));
+    io.emit("users-list-updated", updatedUsers);
+    res.json({ success: true, message: "User deleted" });
+  } catch (e) {
+    console.error("Delete user error:", e.message);
+    res.status(500).json({ success: false, message: "Failed to delete user" });
+  }
+});
+
 // Debug endpoint (only in development)
 if (process.env.NODE_ENV !== "production") {
   app.get("/api/debug", (req, res) => {
