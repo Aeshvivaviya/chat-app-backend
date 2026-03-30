@@ -594,14 +594,19 @@ io.on("connection", (socket) => {
     const roomSize = room ? room.size : 0;
 
     if (roomSize <= 2) {
-      // Only 2 users — end call for everyone
       io.to(roomId).emit("call-ended");
     } else {
-      // Group call — just notify others this user left
       socket.to(roomId).emit("user-left", socket.id);
     }
 
     socket.leave(roomId);
+  });
+
+  // 💬 Meeting Chat
+  socket.on("meeting-message", (msg) => {
+    if (msg?.roomId) {
+      socket.to(msg.roomId).emit("meeting-message", msg);
+    }
   });
 
   // 🔴 Disconnect
