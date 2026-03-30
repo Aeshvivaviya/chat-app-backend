@@ -668,6 +668,7 @@ app.post("/api/login", (req, res) => {
     // Create new user
     const userId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     userNames.set(userId, trimmedUsername);
+    saveUserToFirestore(userId, trimmedUsername);
 
     console.log(
       "✅ New user auto-registered:",
@@ -733,6 +734,7 @@ app.post("/api/register", (req, res) => {
 
     const userId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     userNames.set(userId, trimmedUsername);
+    saveUserToFirestore(userId, trimmedUsername);
 
     console.log("✅ New user registered:", trimmedUsername, "with ID:", userId);
 
@@ -930,15 +932,34 @@ app.post("/api/private-messages", async (req, res) => {
 });
 
 // Get all registered users
-app.get("/api/users", (req, res) => {
-  const allUsers = Array.from(userNames.entries()).map(
-    ([userId, username]) => ({
-      id: userId,
-      username: username,
-      isOnline: onlineUsers.has(userId),
-    }),
-  );
-  res.json(allUsers);
+app.get("/api/users", async (req, res) => {
+  try {
+    // If Firestore available, fetch from there (persistent)
+    if (db) {
+      const snapshot = await db.collection("users").get();
+      const users = [];
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        if (data.id && data.username) {
+          // Also keep in-memory map in sync
+          userNames.set(data.id, data.username);
+          users.push({ id: data.id, username: data.username, isOnline: onlineUsers.has(data.id) });
+        }
+      });
+      return res.json(users);
+    }
+    // Fallback: in-memory
+    const allUsers = Array.from(userNames.entries()).map(([userId, username]) => ({
+      id: userId, username, isOnline: onlineUsers.has(userId),
+    }));
+    res.json(allUsers);
+  } catch (e) {
+    console.error("Error fetching users:", e.message);
+    const allUsers = Array.from(userNames.entries()).map(([userId, username]) => ({
+      id: userId, username, isOnline: onlineUsers.has(userId),
+    }));
+    res.json(allUsers);
+  }
 });
 
 // Get online users only
@@ -1097,8 +1118,36 @@ const logServerStart = (port) => {
 };
 
 // Start server with error handling
+// ✅ Load all users from Firestore into memory on startup
+async function loadUsersFromFirestore() {
+  if (!db) return;
+  try {
+    const snapshot = await db.collection("users").get();
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      if (data.id && data.username) {
+        userNames.set(data.id, data.username);
+      }
+    });
+    console.log(`✅ Loaded ${userNames.size} users from Firestore`);
+  } catch (e) {
+    console.error("❌ Failed to load users from Firestore:", e.message);
+  }
+}
+
+// ✅ Save a user to Firestore
+async function saveUserToFirestore(userId, username) {
+  if (!db) return;
+  try {
+    await db.collection("users").doc(userId).set({ id: userId, username, createdAt: new Date().toISOString() }, { merge: true });
+  } catch (e) {
+    console.error("❌ Failed to save user to Firestore:", e.message);
+  }
+}
+
 server
-  .listen(PORT, HOST, () => {
+  .listen(PORT, HOST, async () => {
+    await loadUsersFromFirestore();
     logServerStart(PORT);
 
     // Self-ping every 14 minutes to prevent Render free tier sleep
