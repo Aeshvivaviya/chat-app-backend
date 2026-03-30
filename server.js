@@ -631,7 +631,33 @@ io.on("connection", (socket) => {
   // 📞 Chat Call Signaling
   socket.on("call-offer", ({ to, from, fromName, offer }) => {
     const receiverSocket = onlineUsers.get(to);
-    if (receiverSocket) io.to(receiverSocket).emit("call-offer", { from, fromName, offer });
+    if (receiverSocket) {
+      io.to(receiverSocket).emit("call-offer", { from, fromName, offer });
+    } else {
+      // User offline — send FCM push notification
+      const fcmToken = fcmTokens.get(to);
+      if (fcmToken && firebaseInitialized) {
+        admin.messaging().send({
+          token: fcmToken,
+          notification: {
+            title: `📞 Incoming call from ${fromName}`,
+            body: "Tap to answer the call",
+          },
+          webpush: {
+            notification: {
+              icon: "/favicon.svg",
+              tag: "incoming-call",
+              renotify: true,
+              requireInteraction: true,
+              actions: [{ action: "answer", title: "Answer" }],
+            },
+            fcmOptions: { link: "https://real-time-chat-application-sand-three.vercel.app/chat" },
+          },
+          data: { type: "call", from, fromName },
+        }).then(() => console.log(`📞 Call FCM sent to ${to}`))
+          .catch(e => console.warn("Call FCM error:", e.message));
+      }
+    }
   });
   socket.on("call-answer", ({ to, answer }) => {
     const receiverSocket = onlineUsers.get(to);
