@@ -628,6 +628,28 @@ io.on("connection", (socket) => {
     }
   });
 
+  // 📞 Chat Call Signaling
+  socket.on("call-offer", ({ to, from, fromName, offer }) => {
+    const receiverSocket = onlineUsers.get(to);
+    if (receiverSocket) io.to(receiverSocket).emit("call-offer", { from, fromName, offer });
+  });
+  socket.on("call-answer", ({ to, answer }) => {
+    const receiverSocket = onlineUsers.get(to);
+    if (receiverSocket) io.to(receiverSocket).emit("call-answered", { answer });
+  });
+  socket.on("call-ice", ({ to, candidate }) => {
+    const receiverSocket = onlineUsers.get(to);
+    if (receiverSocket) io.to(receiverSocket).emit("call-ice", { candidate });
+  });
+  socket.on("call-decline", ({ to }) => {
+    const receiverSocket = onlineUsers.get(to);
+    if (receiverSocket) io.to(receiverSocket).emit("call-declined");
+  });
+  socket.on("call-end-chat", ({ to }) => {
+    const receiverSocket = onlineUsers.get(to);
+    if (receiverSocket) io.to(receiverSocket).emit("call-ended-chat");
+  });
+
   // 🔴 Disconnect
   socket.on("disconnect", (reason) => {
     console.log(`🔴 Client disconnected: ${socket.id}, reason: ${reason}`);
