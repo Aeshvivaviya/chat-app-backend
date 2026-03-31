@@ -339,8 +339,14 @@ io.on("connection", (socket) => {
       }
 
       console.log(
-        `👤 User ${userId} (${userNames.get(userId) || "Unknown"}) registered`,
+        `👤 User ${userId} (${userNames.get(userId) || "Unknown"}) registered with socket ${socket.id}`,
       );
+      console.log(`🔍 DEBUG REGISTRATION:`);
+      console.log(`🔍 User ID: ${userId}`);
+      console.log(`🔍 Username: ${userNames.get(userId) || "Unknown"}`);
+      console.log(`🔍 Socket ID: ${socket.id}`);
+      console.log(`🔍 Total Online Users: ${onlineUsers.size}`);
+      console.log(`🔍 All Online Users: ${Array.from(onlineUsers.entries()).map(([uid, sid]) => `${uid}(${userNames.get(uid) || "Unknown"}):${sid}`).join(', ')}`);
 
       // Send offline messages if any
       const pendingMessages = offlineMessages.get(userId) || [];
@@ -514,6 +520,22 @@ io.on("connection", (socket) => {
 
       const receiverSocketId = onlineUsers.get(toUserId);
 
+      // DEBUG LOGGING: Add detailed logs to diagnose notification issue
+      console.log("🔍 DEBUG NOTIFICATION LOGS:");
+      console.log("🔍 Sender ID:", fromUserId);
+      console.log("🔍 Receiver ID:", toUserId);
+      console.log("🔍 Receiver Socket ID:", receiverSocketId);
+      console.log("🔍 Online Users Map Size:", onlineUsers.size);
+      console.log("🔍 Is Receiver in onlineUsers?", onlineUsers.has(toUserId));
+      console.log("🔍 All online user IDs:", Array.from(onlineUsers.keys()));
+      
+      // IMPORTANT: Check if receiverId is correct (should be friend's ID, not sender's ID)
+      if (toUserId === fromUserId) {
+        console.log("❌ ERROR: Receiver ID is same as Sender ID! Receiver should be friend's ID, not your own ID!");
+        socket.emit("error", { message: "Receiver ID cannot be same as Sender ID" });
+        return;
+      }
+      
       // Send FCM notification regardless of online status
       const fcmToken = fcmTokens.get(toUserId);
       if (fcmToken && firebaseInitialized) {
@@ -537,8 +559,37 @@ io.on("connection", (socket) => {
       }
 
       if (receiverSocketId) {
-        io.to(receiverSocketId).emit("private-message", messageData);
-        console.log(`📨 Message sent to ${toUserId}`);
+        // Check if receiver socket is still connected
+        const receiverSocket = io.sockets.sockets.get(receiverSocketId);
+        if (receiverSocket && receiverSocket.connected) {
+          // Send the actual message
+          io.to(receiverSocketId).emit("private-message", messageData);
+          
+          // Also send a separate notification event
+          io.to(receiverSocketId).emit("new-message-notification", {
+            fromUserId: fromUserId,
+            fromUsername: messageData.fromUsername,
+            messageId: id,
+            messagePreview: text && text.length > 50 ? text.substring(0, 50) + "..." : text || "New message",
+            timestamp: timestamp,
+            type: "message"
+          });
+          
+          console.log(`✅ Message sent to ${toUserId} via socket ${receiverSocketId}`);
+          console.log(`🔔 Notification sent to ${toUserId}`);
+        } else {
+          // Socket ID exists but socket is not connected - clean up
+          console.log(`⚠️ Socket ${receiverSocketId} for user ${toUserId} exists but not connected, cleaning up`);
+          onlineUsers.delete(toUserId);
+          userSockets.delete(receiverSocketId);
+          
+          // Store as offline message
+          console.log(`📨 User ${toUserId} offline (stale socket), storing message`);
+          const pendingMessages = offlineMessages.get(toUserId) || [];
+          pendingMessages.push(messageData);
+          if (pendingMessages.length > 100) pendingMessages.shift();
+          offlineMessages.set(toUserId, pendingMessages);
+        }
       } else {
         console.log(`📨 User ${toUserId} offline, storing message`);
         const pendingMessages = offlineMessages.get(toUserId) || [];
