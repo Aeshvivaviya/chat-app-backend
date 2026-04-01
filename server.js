@@ -160,17 +160,16 @@ let firebaseInitialized = false;
 let db = null;
 
 try {
-  if (
-    process.env.FIREBASE_SERVICE_ACCOUNT &&
-    process.env.FIREBASE_SERVICE_ACCOUNT !== "undefined"
-  ) {
+  const serviceAccountPath = path.join(__dirname, "serviceAccountKey.json");
+  
+  if (fs.existsSync(serviceAccountPath)) {
     try {
-      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+      const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, "utf8"));
       if (!admin.apps.length) {
         admin.initializeApp({
           credential: admin.credential.cert(serviceAccount),
         });
-        console.log("✅ Firebase Admin initialized successfully");
+        console.log("✅ Firebase Admin initialized successfully from serviceAccountKey.json");
         firebaseInitialized = true;
         db = admin.firestore();
       } else {
@@ -180,13 +179,14 @@ try {
       }
     } catch (parseError) {
       console.error(
-        "❌ Failed to parse Firebase service account:",
+        "❌ Failed to parse Firebase service account file:",
         parseError.message,
       );
       console.log("⚠️ Using mock data mode");
     }
   } else {
-    console.log("⚠️ FIREBASE_SERVICE_ACCOUNT not found, using mock data");
+    console.log("⚠️ serviceAccountKey.json not found, using mock data");
+    console.log("💡 To enable Firebase, download serviceAccountKey.json from Firebase Console");
   }
 } catch (error) {
   console.error("❌ Firebase initialization error:", error.message);
@@ -538,7 +538,12 @@ io.on("connection", (socket) => {
       
       // Send FCM notification regardless of online status
       const fcmToken = fcmTokens.get(toUserId);
+      console.log(`🔍 FCM Debug: Checking token for user ${toUserId}`);
+      console.log(`🔍 FCM Debug: Token exists? ${!!fcmToken}`);
+      console.log(`🔍 FCM Debug: Firebase initialized? ${firebaseInitialized}`);
+      
       if (fcmToken && firebaseInitialized) {
+        console.log(`🔍 FCM Debug: Attempting to send to token: ${fcmToken.substring(0, 20)}...`);
         admin.messaging().send({
           token: fcmToken,
           notification: {
@@ -554,8 +559,18 @@ io.on("connection", (socket) => {
             },
             fcmOptions: { link: "https://real-time-chat-application-sand-three.vercel.app/chat" },
           },
-        }).then(() => console.log(`🔔 FCM sent to ${toUserId}`))
-          .catch(e => console.warn("FCM send error:", e.message));
+        }).then(() => console.log(`✅ FCM sent successfully to ${toUserId}`))
+          .catch(e => {
+            console.error(`❌ FCM send failed for user ${toUserId}:`, e.message);
+            console.error(`❌ FCM error details:`, e);
+          });
+      } else {
+        if (!fcmToken) {
+          console.log(`⚠️ No FCM token found for user ${toUserId}. User needs to generate token.`);
+        }
+        if (!firebaseInitialized) {
+          console.log(`⚠️ Firebase not initialized. FCM notifications disabled.`);
+        }
       }
 
       if (receiverSocketId) {
@@ -880,15 +895,29 @@ app.post("/api/save-fcm-token", async (req, res) => {
     if (!userId || !token) {
       return res.status(400).json({ success: false, message: "User ID and token required" });
     }
+    
+    console.log(`📱 FCM Token received for user ${userId}`);
+    console.log(`📱 Token preview: ${token.substring(0, 20)}...${token.substring(token.length - 10)}`);
+    
     fcmTokens.set(userId, token);
+    
     // Persist to Firestore
     if (db) {
-      await db.collection("fcmTokens").doc(userId).set({ userId, token, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
+      await db.collection("fcmTokens").doc(userId).set({ 
+        userId, 
+        token, 
+        updatedAt: new Date().toISOString() 
+      }, { merge: true }).catch((err) => {
+        console.warn(`⚠️ Could not save to Firestore: ${err.message}`);
+      });
     }
-    console.log(`📱 FCM Token saved for user ${userId}`);
+    
+    console.log(`✅ FCM Token saved successfully for user ${userId}`);
+    console.log(`📊 Total FCM tokens stored: ${fcmTokens.size}`);
+    
     res.json({ success: true, message: "Token saved" });
   } catch (error) {
-    console.error("Error saving FCM token:", error);
+    console.error("❌ Error saving FCM token:", error);
     res.status(500).json({ success: false, message: "Failed to save token" });
   }
 });
@@ -1126,6 +1155,36 @@ if (process.env.NODE_ENV !== "production") {
       firebaseInitialized,
       totalUsers: userNames.size,
       protocol: isHttps ? "HTTPS" : "HTTP",
+      fcmTokens: Array.from(fcmTokens.entries()),
+      notificationStatus: {
+        firebaseAdminInitialized: firebaseInitialized,
+        fcmTokensCount: fcmTokens.size,
+        canSendPushNotifications: firebaseInitialized && fcmTokens.size > 0,
+        serviceAccountLoaded: fs.existsSync(path.join(__dirname, "serviceAccountKey.json")),
+      }
+    });
+  });
+  
+  // Notification debug endpoint
+  app.get("/api/debug/notifications", (req, res) => {
+    res.json({
+      firebaseInitialized,
+      fcmTokens: Array.from(fcmTokens.entries()).map(([userId, token]) => ({
+        userId,
+        tokenPreview: token ? `${token.substring(0, 20)}...${token.substring(token.length - 10)}` : null,
+        hasToken: !!token
+      })),
+      onlineUsers: Array.from(onlineUsers.entries()).map(([userId, socketId]) => ({
+        userId,
+        socketId,
+        username: userNames.get(userId) || "Unknown"
+      })),
+      notificationCapabilities: {
+        canSendFCM: firebaseInitialized,
+        totalFCMTokens: fcmTokens.size,
+        totalOnlineUsers: onlineUsers.size,
+        serviceWorkerConfigured: true
+      }
     });
   });
 }

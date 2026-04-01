@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notification Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .success { background: #d4edda; border-color: #c3e6cb; }
+        .warning { background: #fff3cd; border-color: #ffeaa7; }
+        .error { background: #f8d7da; border-color: #f5c6cb; }
+        button { padding: 10px 20px; margin: 5px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        pre { background: #f8f9fa; padding: 10px; border-radius: 4px; overflow: auto; }
+    </style>
+</head>
+<body>
+    <h1>🔔 Chat App Notification Test</h1>
+    
+    <div class="section">
+        <h2>1. Browser Notification Permission</h2>
+        <p id="permission-status">Checking...</p>
+        <button onclick="requestPermission()">Request Notification Permission</button>
+    </div>
+    
+    <div class="section">
+        <h2>2. Service Worker Registration</h2>
+        <p id="sw-status">Checking...</p>
+        <button onclick="registerServiceWorker()">Register Service Worker</button>
+    </div>
+    
+    <div class="section">
+        <h2>3. FCM Token Generation</h2>
+        <p id="fcm-status">Checking...</p>
+        <button onclick="generateFCMToken()">Generate FCM Token</button>
+        <div id="token-display" style="display: none; margin-top: 10px;">
+            <p><strong>FCM Token:</strong> <span id="token-value"></span></p>
+            <button onclick="copyToken()">Copy Token</button>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>4. Backend Status</h2>
+        <p id="backend-status">Checking...</p>
+        <button onclick="checkBackend()">Check Backend</button>
+        <pre id="backend-result" style="display: none;"></pre>
+    </div>
+    
+    <div class="section">
+        <h2>5. Test Notification</h2>
+        <button onclick="testBrowserNotification()">Test Browser Notification</button>
+        <button onclick="testFCMNotification()" id="fcm-test-btn" disabled>Test FCM Notification</button>
+    </div>
+    
+    <div class="section">
+        <h2>Debug Information</h2>
+        <pre id="debug-info"></pre>
+    </div>
+
+    <script>
+        // Import Firebase modules dynamically
+        async function loadFirebase() {
+            if (typeof firebase === 'undefined') {
+                await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');
+                await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js');
+            }
+        }
+
+        // Firebase config (same as in firebase.js)
+        const firebaseConfig = {
+            apiKey: "AIzaSyDL5aKqfy3kTb3lErzkCA2WEmupSspNVIU",
+            authDomain: "real-time-chat-applicati-58e52.firebaseapp.com",
+            projectId: "real-time-chat-applicati-58e52",
+            storageBucket: "real-time-chat-applicati-58e52.appspot.com",
+            messagingSenderId: "650486864472",
+            appId: "1:650486864472:web:b423a644f0010d39bcc82d"
+        };
+
+        let messaging = null;
+        let fcmToken = null;
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', async () => {
+            await checkPermission();
+            await checkServiceWorker();
+            updateDebugInfo();
+        });
+
+        // 1. Check notification permission
+        async function checkPermission() {
+            if (!('Notification' in window)) {
+                document.getElementById('permission-status').innerHTML = 
+                    '<span class="error">❌ Notifications not supported in this browser</span>';
+                return;
+            }
+            
+            const permission = Notification.permission;
+            let status = '';
+            switch(permission) {
+                case 'granted':
+                    status = '<span class="success">✅ Granted</span>';
+                    break;
+                case 'denied':
+                    status = '<span class="error">❌ Denied (check browser settings)</span>';
+                    break;
+                case 'default':
+                    status = '<span class="warning">⚠️ Not requested yet</span>';
+                    break;
+            }
+            document.getElementById('permission-status').innerHTML = status;
+            return permission;
+        }
+
+        async function requestPermission() {
+            const permission = await Notification.requestPermission();
+            await checkPermission();
+            updateDebugInfo();
+        }
+
+        // 2. Check service worker
+        async function checkServiceWorker() {
+            if (!('serviceWorker' in navigator)) {
+                document.getElementById('sw-status').innerHTML = 
+                    '<span class="error">❌ Service Workers not supported</span>';
+                return false;
+            }
+            
+            try {
+                const registration = await navigator.serviceWorker.getRegistration('/firebase-messaging-sw.js');
+                if (registration) {
+                    document.getElementById('sw-status').innerHTML = 
+                        '<span class="success">✅ Registered</span>';
+                    return true;
+                } else {
+                    document.getElementById('sw-status').innerHTML = 
+                        '<span class="warning">⚠️ Not registered</span>';
+                    return false;
+                }
+            } catch (error) {
+                document.getElementById('sw-status').innerHTML = 
+                    `<span class="error">❌ Error: ${error.message}</span>`;
+                return false;
+            }
+        }
+
+        async function registerServiceWorker() {
+            try {
+                await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+                document.getElementById('sw-status').innerHTML = 
+                    '<span class="success">✅ Registered successfully</span>';
+                updateDebugInfo();
+            } catch (error) {
+                document.getElementById('sw-status').innerHTML = 
+                    `<span class="error">❌ Registration failed: ${error.message}</span>`;
+            }
+        }
+
+        // 3. FCM Token generation
+        async function generateFCMToken() {
+            try {
+                await loadFirebase();
+                
+                // Initialize Firebase
+                if (!firebase.apps.length) {
+                    firebase.initializeApp(firebaseConfig);
+                }
+                
+                messaging = firebase.messaging();
+                
+                // Request permission if needed
+                if (Notification.permission !== 'granted') {
+                    await Notification.requestPermission();
+                }
+                
+                // Generate token
+                fcmToken = await messaging.getToken({
+                    vapidKey: "BLytr9s1a7a7sEtA9orJOlfI9jUp_tzMuj0L9RmhsJ6eAvDPhl0GMV3HZhJrPeq9f8tGZ2ziNqd73kZ0_YNWPDA"
+                });
+                
+                if (fcmToken) {
+                    document.getElementById('fcm-status').innerHTML = 
+                        '<span class="success">✅ Token generated</span>';
+                    document.getElementById('token-value').textContent = fcmToken;
+                    document.getElementById('token-display').style.display = 'block';
+                    document.getElementById('fcm-test-btn').disabled = false;
+                    
+                    // Save token to backend (for testing)
+                    try {
+                        await fetch('http://localhost:5003/api/save-fcm-token', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ 
+                                userId: 'test-user-' + Date.now(),
+                                token: fcmToken 
+                            })
+                        });
+                        console.log('Token saved to backend');
+                    } catch (e) {
+                        console.warn('Could not save token to backend:', e.message);
+                    }
+                } else {
+                    document.getElementById('fcm-status').innerHTML = 
+                        '<span class="error">❌ Token generation failed</span>';
+                }
+            } catch (error) {
+                document.getElementById('fcm-status').innerHTML = 
+                    `<span class="error">❌ Error: ${error.message}</span>`;
+                console.error('FCM Error:', error);
+            }
+            updateDebugInfo();
+        }
+
+        function copyToken() {
+            navigator.clipboard.writeText(fcmToken);
+            alert('Token copied to clipboard!');
+        }
+
+        // 4. Check backend
+        async function checkBackend() {
+            try {
+                const response = await fetch('http://localhost:5003/api/debug/notifications');
+                const data = await response.json();
+                
+                let status = '';
+                if (data.firebaseInitialized) {
+                    status += '<span class="success">✅ Firebase Initialized</span><br>';
+                } else {
+                    status += '<span class="error">❌ Firebase NOT Initialized</span><br>';
+                }
+                
+                status += `FCM Tokens: ${data.fcmTokens.length}<br>`;
+                status += `Online Users: ${data.onlineUsers.length}`;
+                
+                document.getElementById('backend-status').innerHTML = status;
+                document.getElementById('backend-result').textContent = JSON.stringify(data, null, 2);
+                document.getElementById('backend-result').style.display = 'block';
+            } catch (error) {
+                document.getElementById('backend-status').innerHTML = 
+                    `<span class="error">❌ Backend unreachable: ${error.message}</span>`;
+            }
+            updateDebugInfo();
+        }
+
+        // 5. Test notifications
+        function testBrowserNotification() {
+            if (Notification.permission === 'granted') {
+                new Notification('Test Notification', {
+                    body: 'This is a test browser notification',
+                    icon: '/favicon.svg',
+                    tag: 'test'
+                });
+                alert('Browser notification sent!');
+            } else {
+                alert('Please grant notification permission first');
+            }
+        }
+
+        async function testFCMNotification() {
+            if (!fcmToken) {
+                alert('Please generate FCM token first');
+                return;
+            }
+            
+            try {
+                // This would normally come from backend
+                alert('FCM test would send to backend. Check backend logs for FCM delivery.');
+            } catch (error) {
+                alert('FCM test error: ' + error.message);
+            }
+        }
+
+        // Update debug info
+        function updateDebugInfo() {
+            const info = {
+                browser: navigator.userAgent,
+                notificationPermission: Notification.permission,
+                serviceWorker: 'serviceWorker' in navigator ? 'Supported' : 'Not supported',
+                fcmToken: fcmToken ? 'Generated' : 'Not generated',
+                location: window.location.href,
+                protocol: window.location.protocol,
+                timestamp: new Date().toISOString()
+            };
+            
+            document.getElementById('debug-info').textContent = JSON.stringify(info, null, 2);
+        }
+    </script>
+</body>
+</html>
